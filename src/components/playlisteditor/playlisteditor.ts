@@ -48,7 +48,8 @@ function onSubmit(this: HTMLElement, e: Event) {
     const panel = dom.parentWithClass(this, 'dialog') as DialogElement | null;
 
     if (panel) {
-        const playlistId = panel.querySelector<HTMLSelectElement>('#selectPlaylistToAddTo')?.value;
+        const playlistCard = panel.querySelector('.playlistCard.selected');
+        const playlistId = playlistCard ? playlistCard.getAttribute('data-id') : null;
 
         loading.show();
 
@@ -165,15 +166,11 @@ function addToPlaylist(dlg: DialogElement, id: string) {
         });
 }
 
-function triggerChange(select: HTMLSelectElement) {
-    select.dispatchEvent(new CustomEvent('change', {}));
-}
-
 function populatePlaylists(editorOptions: PlaylistEditorOptions, panel: DialogElement) {
-    const select = panel.querySelector<HTMLSelectElement>('#selectPlaylistToAddTo');
+    const grid = panel.querySelector<HTMLDivElement>('#playlistGrid');
 
-    if (!select) {
-        return Promise.reject(new Error('Playlist <select> element is missing'));
+    if (!grid) {
+        return Promise.reject(new Error('Playlist grid element is missing'));
     }
 
     loading.show();
@@ -210,9 +207,7 @@ function populatePlaylists(editorOptions: PlaylistEditorOptions, panel: DialogEl
                         permissions
                     }))
                     .catch(err => {
-                        // If a user doesn't have access, then the request will 404 and throw
                         console.info('[PlaylistEditor] Failed to fetch playlist permissions', err);
-
                         return playlist;
                     });
             }));
@@ -221,91 +216,129 @@ function populatePlaylists(editorOptions: PlaylistEditorOptions, panel: DialogEl
             let html = '';
 
             if ((editorOptions.enableAddToPlayQueue !== false && playbackManager.isPlaying()) || SyncPlay?.Manager.isSyncPlayEnabled()) {
-                html += `<option value="queue">${globalize.translate('AddToPlayQueue')}</option>`;
+                html += `
+                    <div class="playlistCard" data-id="queue">
+                        <div class="listItemBody">
+                            <div class="listItemBodyText">
+                                ${globalize.translate('AddToPlayQueue')}
+                            </div>
+                        </div>
+                    </div>`;
             }
-
-            html += `<option value="">${globalize.translate('OptionNew')}</option>`;
 
             html += playlists.map(({ item, permissions }) => {
                 if (!permissions?.CanEdit) return '';
 
-                return `<option value="${item.Id}">${escapeHtml(item.Name)}</option>`;
-            });
+                return `
+                    <div class="playlistCard" data-id="${item.Id}">
+                        <div class="listItemBody">
+                            <div class="listItemBodyText">
+                                ${escapeHtml(item.Name)}
+                            </div>
+                        </div>
+                    </div>`;
+            }).join('');
 
-            select.innerHTML = html;
+            grid.innerHTML = html;
+
+            // Add click event listeners to grid items
+            grid.querySelectorAll('.playlistCard').forEach(card => {
+                card.addEventListener('click', () => {
+                    // Remove selected class from all cards
+                    grid.querySelectorAll('.playlistCard').forEach(c => c.classList.remove('selected'));
+                    // Add selected class to clicked card
+                    card.classList.add('selected');
+
+                    // Update form visibility
+                    const selectedId = card.getAttribute('data-id');
+                    const newPlaylistInfo = card.closest('form')?.querySelector('.newPlaylistInfo');
+                    const txtNewPlaylistName = card.closest('form')?.querySelector('#txtNewPlaylistName') as HTMLInputElement;
+
+                    if (newPlaylistInfo && txtNewPlaylistName) {
+                        if (selectedId) {
+                            newPlaylistInfo.classList.add('hide');
+                            txtNewPlaylistName.removeAttribute('required');
+                        } else {
+                            newPlaylistInfo.classList.remove('hide');
+                            txtNewPlaylistName.setAttribute('required', 'required');
+                        }
+                    }
+                });
+            });
 
             let defaultValue = editorOptions.defaultValue;
             if (!defaultValue) {
                 defaultValue = userSettings.get('playlisteditor-lastplaylistid') || '';
             }
-            select.value = defaultValue === 'new' ? '' : defaultValue;
 
-            // If the value is empty set it again, in case we tried to set a lastplaylistid that is no longer valid
-            if (!select.value) {
-                select.value = '';
+            // Select default playlist if exists
+            const defaultCard = grid.querySelector(`.playlistCard[data-id="${defaultValue}"]`);
+            if (defaultCard) {
+                defaultCard.classList.add('selected');
             }
-
-            triggerChange(select);
         });
 }
 
 function getEditorHtml(items: string[], options: PlaylistEditorOptions) {
-    let html = '';
-
-    html += '<div class="formDialogContent smoothScrollY" style="padding-top:2em;">';
-    html += '<div class="dialogContentInner dialog-content-centered">';
-    html += '<form style="margin:auto;">';
-
-    html += '<div class="fldSelectPlaylist selectContainer">';
-    let autoFocus = items.length ? ' autofocus' : '';
-    html += `<select is="emby-select" id="selectPlaylistToAddTo" label="${globalize.translate('LabelPlaylist')}"${autoFocus}></select>`;
-    html += '</div>';
-
-    html += '<div class="newPlaylistInfo">';
-
-    html += '<div class="inputContainer">';
-    autoFocus = items.length ? '' : ' autofocus';
-    html += `<input is="emby-input" type="text" id="txtNewPlaylistName" required="required" label="${globalize.translate('LabelName')}"${autoFocus} />`;
-    html += '</div>';
-
-    html += `
-    <div class="checkboxContainer checkboxContainer-withDescription">
-        <label>
-            <input type="checkbox" is="emby-checkbox" id="chkPlaylistPublic" />
-            <span>${globalize.translate('PlaylistPublic')}</span>
-        </label>
-        <div class="fieldDescription checkboxFieldDescription">
-            ${globalize.translate('PlaylistPublicDescription')}
+    let html = `
+        <style>
+            .playlistGrid {
+                display: grid;
+                grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+                gap: 1.5em;
+                padding: 1em;
+            }
+            .playlistCard {
+                position: relative;
+                background: var(--card-background);
+                border-radius: 4px;
+                overflow: hidden;
+                box-shadow: 0 1px 3px rgba(0,0,0,0.12);
+                transition: transform 0.2s ease, box-shadow 0.2s ease;
+                cursor: pointer;
+                padding: 1em;
+            }
+            .playlistCard.selected {
+                border: 2px solid var(--accent-color);
+                transform: translateY(-2px);
+                box-shadow: 0 4px 6px rgba(0,0,0,0.15);
+            }
+        </style>
+        <div class="formDialogContent smoothScrollY" style="padding-top:2em;">
+            <div class="dialogContentInner dialog-content-centered">
+                <form style="margin:auto;">
+                    <div class="playlistGrid" id="playlistGrid"></div>
+                    <div class="newPlaylistInfo">
+                        <div class="inputContainer">
+                            <input is="emby-input" type="text" id="txtNewPlaylistName"
+                                required="required" label="${globalize.translate('LabelName')}"
+                                ${items.length ? '' : 'autofocus'}/>
+                        </div>
+                    </div>
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label>
+                            <input type="checkbox" is="emby-checkbox" id="chkPlaylistPublic" />
+                            <span>${globalize.translate('PlaylistPublic')}</span>
+                        </label>
+                        <div class="fieldDescription checkboxFieldDescription">
+                            ${globalize.translate('PlaylistPublicDescription')}
+                        </div>
+                    </div>
+                    <div class="formDialogFooter">
+                        <button is="emby-button" type="submit" class="raised btnSubmit block formDialogFooterItem button-submit">
+                            ${options.id ? globalize.translate('Save') : globalize.translate('Add')}
+                        </button>
+                    </div>
+                    <input type="hidden" class="fldSelectedItemIds" />
+                </form>
+            </div>
         </div>
-    </div>`;
-
-    // newPlaylistInfo
-    html += '</div>';
-
-    html += '<div class="formDialogFooter">';
-    html += `<button is="emby-button" type="submit" class="raised btnSubmit block formDialogFooterItem button-submit">${options.id ? globalize.translate('Save') : globalize.translate('Add')}</button>`;
-    html += '</div>';
-
-    html += '<input type="hidden" class="fldSelectedItemIds" />';
-
-    html += '</form>';
-    html += '</div>';
-    html += '</div>';
+    `;
 
     return html;
 }
 
 function initEditor(content: DialogElement, options: PlaylistEditorOptions, items: string[]) {
-    content.querySelector('#selectPlaylistToAddTo')?.addEventListener('change', function(this: HTMLSelectElement) {
-        if (this.value) {
-            content.querySelector('.newPlaylistInfo')?.classList.add('hide');
-            content.querySelector('#txtNewPlaylistName')?.removeAttribute('required');
-        } else {
-            content.querySelector('.newPlaylistInfo')?.classList.remove('hide');
-            content.querySelector('#txtNewPlaylistName')?.setAttribute('required', 'required');
-        }
-    });
-
     content.querySelector('form')?.addEventListener('submit', onSubmit);
 
     const selectedItemsInput = content.querySelector<HTMLInputElement>('.fldSelectedItemIds');
@@ -314,14 +347,12 @@ function initEditor(content: DialogElement, options: PlaylistEditorOptions, item
     }
 
     if (items.length) {
-        content.querySelector('.fldSelectPlaylist')?.classList.remove('hide');
         populatePlaylists(options, content)
             .catch(err => {
                 console.error('[PlaylistEditor] failed to populate playlists', err);
             })
             .finally(loading.hide);
     } else if (options.id) {
-        content.querySelector('.fldSelectPlaylist')?.classList.add('hide');
         const panel = dom.parentWithClass(content, 'dialog') as DialogElement | null;
         if (!panel) {
             console.error('[PlaylistEditor] could not find dialog element');
@@ -348,32 +379,7 @@ function initEditor(content: DialogElement, options: PlaylistEditorOptions, item
             .catch(err => {
                 console.error('[playlistEditor] failed to get playlist details', err);
             });
-    } else {
-        content.querySelector('.fldSelectPlaylist')?.classList.add('hide');
-
-        const selectPlaylistToAddTo = content.querySelector<HTMLSelectElement>('#selectPlaylistToAddTo');
-        if (selectPlaylistToAddTo) {
-            selectPlaylistToAddTo.innerHTML = '';
-            selectPlaylistToAddTo.value = '';
-            triggerChange(selectPlaylistToAddTo);
-        }
     }
-}
-
-function centerFocus(elem: HTMLDivElement | null, horiz: boolean, on: boolean) {
-    if (!elem) {
-        console.error('[PlaylistEditor] cannot focus null element');
-        return;
-    }
-
-    import('../../scripts/scrollHelper')
-        .then((scrollHelper) => {
-            const fn = on ? 'on' : 'off';
-            scrollHelper.centerFocus[fn](elem, horiz);
-        })
-        .catch(err => {
-            console.error('[PlaylistEditor] failed to load scroll helper', err);
-        });
 }
 
 export class PlaylistEditor {
@@ -416,15 +422,7 @@ export class PlaylistEditor {
             dialogHelper.close(dlg);
         });
 
-        if (layoutManager.tv) {
-            centerFocus(dlg.querySelector('.formDialogContent'), false, true);
-        }
-
         return dialogHelper.open(dlg).then(() => {
-            if (layoutManager.tv) {
-                centerFocus(dlg.querySelector('.formDialogContent'), false, false);
-            }
-
             if (dlg.submitted) {
                 return Promise.resolve();
             }
